@@ -1,0 +1,218 @@
+name: Release Git Push Tool
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Release version (e.g., v1.1.0)'
+        required: true
+        default: 'v1.1.0'
+
+permissions:
+  contents: write
+
+jobs:
+  # ==================== 构建阶段 ====================
+  build:
+    name: Build ${{ matrix.os }}-${{ matrix.arch }}
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # Windows
+          - os: windows
+            arch: amd64
+            runner: windows-latest
+            ext: .exe
+            cgo: 0
+          - os: windows
+            arch: arm64
+            runner: windows-latest
+            ext: .exe
+            cgo: 0
+          # Linux
+          - os: linux
+            arch: amd64
+            runner: ubuntu-latest
+            ext: ''
+            cgo: 0
+          - os: linux
+            arch: arm64
+            runner: ubuntu-latest
+            ext: ''
+            cgo: 0
+          # macOS
+          - os: darwin
+            arch: amd64
+            runner: macos-latest
+            ext: ''
+            cgo: 0
+          - os: darwin
+            arch: arm64
+            runner: macos-latest
+            ext: ''
+            cgo: 0
+          # Android (Termux)
+          - os: android
+            arch: arm64
+            runner: ubuntu-latest
+            ext: ''
+            cgo: 1
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.21'
+          cache: true
+
+      - name: Install Android NDK (for Android build)
+        if: matrix.os == 'android'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y android-ndk
+          echo "ANDROID_NDK_HOME=/usr/lib/android-ndk" >> $GITHUB_ENV
+          echo "ANDROID_NDK_ROOT=/usr/lib/android-ndk" >> $GITHUB_ENV
+
+      - name: Build binary
+        env:
+          GOOS: ${{ matrix.os }}
+          GOARCH: ${{ matrix.arch }}
+          CGO_ENABLED: ${{ matrix.cgo }}
+          CC: ${{ matrix.os == 'android' && 'aarch64-linux-android21-clang' || '' }}
+        run: |
+          # 版本信息注入
+          VERSION=${{ github.event.inputs.version }}
+          BUILD_TIME=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+          COMMIT_SHA=${{ github.sha }}
+
+          # 构建参数
+          LDFLAGS="-s -w -X main.Version=$VERSION -X main.BuildTime=$BUILD_TIME -X main.CommitSHA=$COMMIT_SHA"
+
+          OUTPUT_NAME="git-push-${{ matrix.os }}-${{ matrix.arch }}${{ matrix.ext }}"
+
+          echo "Building: $OUTPUT_NAME"
+          echo "GOOS=$GOOS GOARCH=$GOARCH CGO_ENABLED=$CGO_ENABLED"
+
+          go build -ldflags "$LDFLAGS" -o "$OUTPUT_NAME" .
+
+      - name: Test binary (native only)
+        if: matrix.runner == 'ubuntu-latest' && matrix.os == 'linux' && matrix.arch == 'amd64'
+        run: |
+          ./git-push-linux-amd64 --help || true
+          file git-push-linux-amd64
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: git-push-${{ matrix.os }}-${{ matrix.arch }}
+          path: git-push-${{ matrix.os }}-${{ matrix.arch }}${{ matrix.ext }}
+          retention-days: 1
+
+  # ==================== 发布阶段 ====================
+  release:
+    name: Create Release
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+          merge-multiple: false
+
+      - name: Package binaries
+        run: |
+          mkdir -p release
+
+          # 遍历所有 artifact 目录
+          for dir in artifacts/*/; do
+            binary=$(find "$dir" -type f | head -1)
+            if [ -n "$binary" ]; then
+              filename=$(basename "$binary")
+              # 提取 os-arch 信息
+              base="${filename%.*}"
+
+              # 压缩打包
+              if [[ "$filename" == *.exe ]]; then
+                zip -j "release/${base}.zip" "$binary"
+                echo "Packaged: ${base}.zip"
+              else
+                tar -czf "release/${base}.tar.gz" -C "$(dirname "$binary")" "$(basename "$binary")"
+                echo "Packaged: ${base}.tar.gz"
+              fi
+
+              # 同时保留原始二进制（用于 checksum）
+              cp "$binary" "release/$filename"
+            fi
+          done
+
+          ls -la release/
+
+      - name: Generate checksums
+        run: |
+          cd release
+          sha256sum * > checksums-sha256.txt
+          cat checksums-sha256.txt
+
+      - name: Get version info
+        id: version
+        run: |
+          VERSION=${{ github.event.inputs.version }}
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+          echo "Version: $VERSION"
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.version.outputs.version }}
+          name: Git Push Tool ${{ steps.version.outputs.version }}
+          body: |
+            ## Git Push Tool ${{ steps.version.outputs.version }}
+
+            交互式 Git 管理终端工具，支持方向键导航、Token 自动注入、提交历史重写。
+
+            ### 支持平台
+            | 平台 | 架构 | 文件名 |
+            |------|------|--------|
+            | Windows | x64 | `git-push-windows-amd64.exe` |
+            | Windows | ARM64 | `git-push-windows-arm64.exe` |
+            | Linux | x64 | `git-push-linux-amd64` |
+            | Linux | ARM64 | `git-push-linux-arm64` |
+            | macOS | x64 | `git-push-darwin-amd64` |
+            | macOS | ARM64 (Apple Silicon) | `git-push-darwin-arm64` |
+            | Android | ARM64 (Termux) | `git-push-android-arm64` |
+
+            ### 快速开始
+            ```bash
+            # 下载对应平台的二进制文件
+            # 赋予执行权限（Linux/macOS/Android）
+            chmod +x git-push-*
+
+            # 运行
+            ./git-push-*
+            ```
+
+            ### 配置文件
+            首次运行会在项目目录自动生成 `git-config.txt`：
+            ```
+            GITHUB_USERNAME=your_username
+            GITHUB_TOKEN=ghp_xxxxxxxxxxxxxxxxxxxx
+            REPO_URL=https://github.com/your_username/your_repo.git
+            ```
+
+            ### 校验和
+            见 `checksums-sha256.txt`
+          files: |
+            release/git-push-*
+            release/checksums-sha256.txt
+          draft: false
+          prerelease: false
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
