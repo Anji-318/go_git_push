@@ -1,6 +1,6 @@
 
 
-> **版本**: v1.1  
+> **版本**: v1.0  
 > **语言**: Go  
 > **平台**: Windows / Linux / macOS / Termux / Android  
 > **作者**: 基于社区需求定制开发  
@@ -168,7 +168,8 @@ REPO_URL=https://github.com/your_username/your_repo.git
 ## 🎮 操作指南
 
 ### 启动界面
-![启动界面](./png/启动界面.png)
+![启动界面](./png/启动界面-1.png)
+![启动界面](./png/启动界面-2.png)
 
 ### 常用工作流
 
@@ -274,7 +275,7 @@ git config --local pack.packSizeLimit 256m
 
 ## 📝 更新日志
 
-### v1.1 (2026-07-11)
+### v1.0 (2026-07-11)
 - ✅ 初始版本发布
 - ✅ 22 项 Git 操作功能
 - ✅ 方向键交互式菜单
