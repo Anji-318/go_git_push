@@ -1,6 +1,6 @@
 
 
-> **版本**: v1.0  
+> **版本**: v1.1  
 > **语言**: Go  
 > **平台**: Windows / Linux / macOS / Termux / Android  
 > **作者**: 基于社区需求定制开发  
